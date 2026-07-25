@@ -1,7 +1,7 @@
 // 涂鸦手绘：随机抖动 + 多重描边模拟手抖 + 微旋转
 import { mapCmds, parsePath, serialize, transformCmds, type Cmd } from '../path';
 import { mulberry32 } from '../rng';
-import { lerp, type EngineRun, type SceneEl } from './types';
+import { type EngineRun, type SceneEl } from './types';
 
 export const doodleRun: EngineRun = ({ layout, params, paint, seed }) => {
   const { glyphs, bbox } = layout;

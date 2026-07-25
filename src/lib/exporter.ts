@@ -1,6 +1,8 @@
 // 导出：SVG / 高清 PNG / SMIL 动画 / WebM 视频
 import type { Scene } from './engines/index';
-import { cmdsLength, parsePath } from './path';
+import { cmdsBBox, cmdsLength, parsePath, type BBox } from './path';
+import { GRADIENT_PRESETS, type ColorSpec } from './paint';
+import { mulberry32 } from './rng';
 
 export function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
@@ -99,9 +101,18 @@ function buildTimeline(scene: Scene): Timeline {
   return { strokes, fills, total: acc + fadeSpan + 0.25 };
 }
 
-function esc(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+// XML 属性值转义：所有拼入 SVG 字符串的值都必须经过这里
+export function esc(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
+
+const num = (n: unknown, dflt: number): number =>
+  typeof n === 'number' && Number.isFinite(n) ? n : dflt;
 
 export function exportSMIL(scene: Scene, defsMarkup: string, name: string) {
   const tl = buildTimeline(scene);
@@ -109,10 +120,12 @@ export function exportSMIL(scene: Scene, defsMarkup: string, name: string) {
   scene.els.forEach((e, i) => {
     if (e.ghost) return;
     const base =
-      `d="${esc(e.d)}" fill="${e.fill ?? 'none'}"` +
-      (e.stroke ? ` stroke="${e.stroke}" stroke-width="${e.sw ?? 1}" stroke-linecap="${e.cap ?? 'round'}" stroke-linejoin="${e.join ?? 'round'}"` : '') +
-      (e.rule ? ` fill-rule="${e.rule}"` : '') +
-      (e.mask ? ` mask="${e.mask}"` : '');
+      `d="${esc(e.d)}" fill="${esc(e.fill ?? 'none')}"` +
+      (e.stroke
+        ? ` stroke="${esc(e.stroke)}" stroke-width="${num(e.sw, 1)}" stroke-linecap="${esc(e.cap ?? 'round')}" stroke-linejoin="${esc(e.join ?? 'round')}"`
+        : '') +
+      (e.rule ? ` fill-rule="${esc(e.rule)}"` : '') +
+      (e.mask ? ` mask="${esc(e.mask)}"` : '');
     const st = tl.strokes.find((s) => s.idx === i);
     if (st) {
       parts.push(
@@ -126,45 +139,90 @@ export function exportSMIL(scene: Scene, defsMarkup: string, name: string) {
     if (fl) {
       parts.push(
         `<path ${base} opacity="0">` +
-          `<animate attributeName="opacity" from="0" to="${fl.target}" begin="${fl.begin.toFixed(2)}s" dur="${fl.dur.toFixed(2)}s" fill="freeze"/>` +
+          `<animate attributeName="opacity" from="0" to="${num(fl.target, 1)}" begin="${fl.begin.toFixed(2)}s" dur="${fl.dur.toFixed(2)}s" fill="freeze"/>` +
           `</path>`
       );
       return;
     }
-    parts.push(`<path ${base} opacity="${e.opacity ?? 1}"/>`);
+    parts.push(`<path ${base} opacity="${num(e.opacity, 1)}"/>`);
   });
   const svg =
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${scene.viewBox}">` +
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${esc(scene.viewBox)}">` +
     `<defs>${defsMarkup}${scene.defs ?? ''}</defs>` +
-    (scene.filter ? `<g filter="${scene.filter}">${parts.join('')}</g>` : parts.join('')) +
+    (scene.filter ? `<g filter="${esc(scene.filter)}">${parts.join('')}</g>` : parts.join('')) +
     `</svg>`;
   downloadBlob(new Blob([svg], { type: 'image/svg+xml;charset=utf-8' }), `${name}-动画.svg`);
 }
 
-export async function exportWebM(scene: Scene, name: string, onError: (msg: string) => void) {
+// ---------- WebM：Canvas 原生实现渐变 / 白文挖空 / 做旧（不依赖 SVG 滤镜与 url() 画笔） ----------
+export async function exportWebM(
+  scene: Scene,
+  color: ColorSpec,
+  name: string,
+  onError: (msg: string) => void
+) {
   const vb = scene.viewBox.split(/\s+/).map(Number);
   const scale = 2;
+  const W = Math.round(vb[2] * scale);
+  const H = Math.round(vb[3] * scale);
   const canvas = document.createElement('canvas');
-  canvas.width = Math.round(vb[2] * scale);
-  canvas.height = Math.round(vb[3] * scale);
+  canvas.width = W;
+  canvas.height = H;
   const ctx = canvas.getContext('2d')!;
+  // 墨水层：所有笔迹先画到离屏画布，挖空与做旧只作用于墨水，不破坏白底
+  const ink = document.createElement('canvas');
+  ink.width = W;
+  ink.height = H;
+  const ictx = ink.getContext('2d')!;
   const tl = buildTimeline(scene);
 
-  const strokeItems = tl.strokes.map((s) => ({
-    ...s,
-    path: new Path2D(scene.els[s.idx].d),
-    style: scene.els[s.idx],
-  }));
-  const fillItems = tl.fills.map((f) => ({
-    ...f,
-    path: new Path2D(scene.els[f.idx].d),
-    style: scene.els[f.idx],
-  }));
-  const ghosts = scene.els
-    .map((e, i) => ({ e, i }))
-    .filter(({ e }) => e.ghost)
-    .map(({ e }) => new Path2D(e.d));
-  const maskedBg = scene.els.find((e) => e.mask && e.fill);
+  // 渐变 → CanvasGradient；按元素自身 bbox 取对角线，对齐 SVG objectBoundingBox 语义
+  const grad = GRADIENT_PRESETS.find((g) => g.key === color.value) ?? GRADIENT_PRESETS[0];
+  const bboxOf = (d: string): BBox | null => {
+    try {
+      return cmdsBBox(parsePath(d));
+    } catch {
+      return null;
+    }
+  };
+  const paintFor = (css: string | undefined, bbox: BBox | null): string | CanvasGradient => {
+    if (!css) return '#000000';
+    if (!css.startsWith('url(')) return css;
+    if (!bbox || bbox.maxX - bbox.minX < 1e-3) return grad.stops[0][1];
+    const g = ictx.createLinearGradient(bbox.minX, bbox.minY, bbox.maxX, bbox.maxY);
+    for (const [o, c] of grad.stops) g.addColorStop(o, c);
+    return g;
+  };
+
+  const strokeItems = tl.strokes.map((s) => {
+    const st = scene.els[s.idx];
+    return { ...s, path: new Path2D(st.d), style: st, paint: paintFor(st.stroke, bboxOf(st.d)) };
+  });
+  const fillItems = tl.fills.map((f) => {
+    const st = scene.els[f.idx];
+    return { ...f, path: new Path2D(st.d), style: st, paint: paintFor(st.fill, bboxOf(st.d)), masked: !!st.mask };
+  });
+  const ghosts = scene.els.filter((e) => e.ghost).map((e) => new Path2D(e.d));
+  const maskedBg = fillItems.find((f) => f.masked) ?? null; // 白文印章底色
+  const plainFills = fillItems.filter((f) => !f.masked);
+
+  // 做旧质感：feTurbulence 无法用于 Canvas，用确定性块状噪声对墨水层做侵蚀近似
+  let noise: HTMLCanvasElement | null = null;
+  if (scene.filter) {
+    const nw = Math.max(1, W >> 1);
+    const nh = Math.max(1, H >> 1);
+    noise = document.createElement('canvas');
+    noise.width = nw;
+    noise.height = nh;
+    const nctx = noise.getContext('2d')!;
+    const img = nctx.createImageData(nw, nh);
+    const rng = mulberry32(0x9e3779b9);
+    for (let i = 0; i < img.data.length; i += 4) {
+      img.data[i] = img.data[i + 1] = img.data[i + 2] = 255;
+      img.data[i + 3] = rng() < 0.3 ? 255 : 0;
+    }
+    nctx.putImageData(img, 0, 0);
+  }
 
   const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
     ? 'video/webm;codecs=vp9'
@@ -183,64 +241,67 @@ export async function exportWebM(scene: Scene, name: string, onError: (msg: stri
 
   const draw = () => {
     const el = (performance.now() - t0) / 1000;
-    ctx.setTransform(scale, 0, 0, scale, -vb[0] * scale, -vb[1] * scale);
-    ctx.clearRect(vb[0], vb[1], vb[2], vb[3]);
-    // 白底（WebM 不透明背景，便于直接分享）
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(vb[0], vb[1], vb[2], vb[3]);
-    if (scene.filter) {
-      try {
-        (ctx as any).filter = scene.filter;
-      } catch {
-        /* 忽略不支持的滤镜 */
-      }
-    }
-    // 白文印章：先铺底色，再挖空
+    // 1) 墨水层
+    ictx.setTransform(scale, 0, 0, scale, -vb[0] * scale, -vb[1] * scale);
+    ictx.clearRect(vb[0], vb[1], vb[2], vb[3]);
+    // 白文印章：先铺底色，再用 ghost 字形挖空
     if (maskedBg) {
-      ctx.fillStyle = maskedBg.fill!;
-      ctx.fill(new Path2D(maskedBg.d));
-      if (ghosts.length) {
-        ctx.save();
-        ctx.globalCompositeOperation = 'destination-out';
-        for (const g of ghosts) ctx.fill(g);
-        ctx.restore();
+      const p = Math.min(Math.max((el - maskedBg.begin) / maskedBg.dur, 0), 1);
+      if (p > 0) {
+        ictx.globalAlpha = p * maskedBg.target;
+        ictx.fillStyle = maskedBg.paint;
+        ictx.fill(maskedBg.path);
+        ictx.globalAlpha = 1;
+        ictx.save();
+        ictx.globalCompositeOperation = 'destination-out';
+        for (const g of ghosts) ictx.fill(g);
+        ictx.restore();
       }
     }
     // 填充淡入
-    for (const f of fillItems) {
+    for (const f of plainFills) {
       const p = Math.min(Math.max((el - f.begin) / f.dur, 0), 1);
       if (p <= 0) continue;
-      ctx.globalAlpha = p * f.target;
-      ctx.fillStyle = f.style.fill!;
-      ctx.fill(f.path);
+      ictx.globalAlpha = p * f.target;
+      ictx.fillStyle = f.paint;
+      ictx.fill(f.path);
     }
-    ctx.globalAlpha = 1;
+    ictx.globalAlpha = 1;
     // 描边书写
     for (const s of strokeItems) {
       const p = Math.min(Math.max((el - s.begin) / s.dur, 0), 1);
       if (p <= 0) continue;
-      ctx.strokeStyle = s.style.stroke!;
-      ctx.lineWidth = s.style.sw ?? 1;
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      ctx.globalAlpha = s.style.opacity ?? 1;
+      ictx.strokeStyle = s.paint;
+      ictx.lineWidth = num(s.style.sw, 1);
+      ictx.lineCap = 'round';
+      ictx.lineJoin = 'round';
+      ictx.globalAlpha = num(s.style.opacity, 1);
       if (p >= 1) {
-        ctx.setLineDash([]);
-        ctx.stroke(s.path);
+        ictx.setLineDash([]);
+        ictx.stroke(s.path);
       } else {
-        ctx.setLineDash([s.len * p, s.len * 1.2]);
-        ctx.lineDashOffset = 0;
-        ctx.stroke(s.path);
+        ictx.setLineDash([s.len * p, s.len * 1.2]);
+        ictx.lineDashOffset = 0;
+        ictx.stroke(s.path);
       }
     }
-    ctx.globalAlpha = 1;
-    if (scene.filter) {
-      try {
-        (ctx as any).filter = 'none';
-      } catch {
-        /* ignore */
-      }
+    ictx.globalAlpha = 1;
+    ictx.setLineDash([]);
+    // 2) 做旧噪声侵蚀（仅墨水层）
+    if (noise) {
+      ictx.save();
+      ictx.setTransform(1, 0, 0, 1, 0, 0);
+      ictx.globalCompositeOperation = 'destination-out';
+      ictx.globalAlpha = 0.55;
+      ictx.imageSmoothingEnabled = false;
+      ictx.drawImage(noise, 0, 0, W, H);
+      ictx.restore();
     }
+    // 3) 合成：白底 + 墨水（WebM 为不透明的白底视频，便于直接分享）
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, W, H);
+    ctx.drawImage(ink, 0, 0);
     if (el < tl.total) {
       requestAnimationFrame(draw);
     } else {

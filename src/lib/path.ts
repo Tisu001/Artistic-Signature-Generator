@@ -219,11 +219,15 @@ export function rdp(pts: Pt[], tol: number): Pt[] {
     const [x2, y2] = pts[e];
     const dx = x2 - x1;
     const dy = y2 - y1;
-    const len = Math.hypot(dx, dy) || 1e-9;
+    const len = Math.hypot(dx, dy);
     let maxD = 0;
     let idx = -1;
     for (let i = s + 1; i < e; i++) {
-      const d = Math.abs((pts[i][0] - x1) * dy - (pts[i][1] - y1) * dx) / len;
+      // 弦长退化（首尾同点，如未去重的闭合环）时退化为点到锚点的距离，避免整体塌缩
+      const d =
+        len < 1e-6
+          ? Math.hypot(pts[i][0] - x1, pts[i][1] - y1)
+          : Math.abs((pts[i][0] - x1) * dy - (pts[i][1] - y1) * dx) / len;
       if (d > maxD) {
         maxD = d;
         idx = i;

@@ -38,6 +38,7 @@ interface ControlPanelProps {
   onShare: () => void;
   onUploadFont: (f: File) => void;
   exporting: boolean;
+  exportDisabled: boolean; // 场景生成中或已过期时禁止导出
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -57,6 +58,7 @@ export function ControlPanel({
   onShare,
   onUploadFont,
   exporting,
+  exportDisabled,
 }: ControlPanelProps) {
   const fileRef = useRef<HTMLInputElement>(null);
   const fonts = allFontMetas();
@@ -139,13 +141,7 @@ export function ControlPanel({
       </Section>
 
       <Section title="参数微调">
-        {(
-          [
-            ['flourish', '飘逸程度'],
-            ['tightness', '连笔紧密度'],
-            ['weight', '笔画粗细'],
-          ] as const
-        ).map(([key, label]) => (
+        {ENGINES[state.engine].sliders.map(({ key, label }) => (
           <div key={key} className="space-y-1.5">
             <div className="flex items-center justify-between">
               <Label className="text-sm">{label}</Label>
@@ -270,19 +266,19 @@ export function ControlPanel({
 
       <Section title="导出与分享">
         <div className="grid grid-cols-2 gap-2">
-          <Button variant="outline" size="sm" disabled={exporting} onClick={() => onExport('svg')}>
+          <Button variant="outline" size="sm" disabled={exporting || exportDisabled} onClick={() => onExport('svg')}>
             SVG 矢量
           </Button>
-          <Button variant="outline" size="sm" disabled={exporting} onClick={() => onExport('png2')}>
+          <Button variant="outline" size="sm" disabled={exporting || exportDisabled} onClick={() => onExport('png2')}>
             PNG ×2
           </Button>
-          <Button variant="outline" size="sm" disabled={exporting} onClick={() => onExport('png4')}>
+          <Button variant="outline" size="sm" disabled={exporting || exportDisabled} onClick={() => onExport('png4')}>
             PNG ×4
           </Button>
-          <Button variant="outline" size="sm" disabled={exporting} onClick={() => onExport('smil')}>
+          <Button variant="outline" size="sm" disabled={exporting || exportDisabled} onClick={() => onExport('smil')}>
             SVG 书写动画
           </Button>
-          <Button variant="outline" size="sm" disabled={exporting} onClick={() => onExport('webm')}>
+          <Button variant="outline" size="sm" disabled={exporting || exportDisabled} onClick={() => onExport('webm')}>
             {exporting ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : null}
             WebM 视频
           </Button>
@@ -291,7 +287,8 @@ export function ControlPanel({
           </Button>
         </div>
         <p className="text-[11px] leading-relaxed text-muted-foreground">
-          SVG 可直接用于刻章与印刷；PNG 透明背景；动画 SVG 用浏览器打开即可播放；WebM 为白底视频。
+          SVG/PNG 为矢量与高分辨率位图，适合设计稿与二次加工；正式印刷或刻章前，请在专业软件中展开描边、转曲并核对物理尺寸与色彩。动画
+          SVG 用浏览器打开即可播放；WebM 为白底视频（印章做旧在视频中为噪声近似）。
         </p>
       </Section>
     </div>

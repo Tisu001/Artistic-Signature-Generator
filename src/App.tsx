@@ -6,8 +6,9 @@ import { ControlPanel } from '@/components/ControlPanel';
 import { Preview } from '@/components/Preview';
 import { type EngineKey, type Scene } from '@/lib/engines/index';
 import { exportPNG, exportSMIL, exportSVG, exportWebM } from '@/lib/exporter';
-import { registerUpload } from '@/lib/fonts';
+import { allFontMetas, persistUpload, registerUpload, restoreUploads, serializeUploads } from '@/lib/fonts';
 import { paintDefs } from '@/lib/paint';
+import type { BuildRequest } from '@/lib/scene.worker';
 import {
   copyShareLink,
   DEFAULT_STATE,
@@ -16,91 +17,162 @@ import {
   type AppState,
 } from '@/lib/share';
 
+interface BuiltScene {
+  scene: Scene;
+  text: string; // 生成时使用的文本：导出文件名以此为准，避免"旧签名、新文件名"
+  sig: string; // 生成时状态的签名：与当前状态不一致时禁止导出
+}
+
+// 状态签名：影响场景内容的所有字段（预览背景除外）
+const reqSig = (s: AppState) =>
+  JSON.stringify([s.text, s.fontKey, s.engine, s.params, s.color, s.seal]);
+
+type BuildHandler = (m: { type: string; stage?: string; scene?: Scene; missing?: string[]; text?: string; error?: string }) => void;
+
+// 常驻 Worker：字体与 HarfBuzz 缓存跨构建保留；超时/异常时才销毁重建
+function useSceneBuilder() {
+  const workerRef = useRef<Worker | null>(null);
+  const handlersRef = useRef(new Map<number, BuildHandler>());
+  const syncedSigRef = useRef<string | null>(null); // 当前 Worker 实例已同步的上传字体签名（null=未同步）
+
+  const ensureWorker = (): Worker => {
+    if (!workerRef.current) {
+      const w = new Worker(new URL('./lib/scene.worker.ts', import.meta.url), { type: 'module' });
+      w.onmessage = (ev) => {
+        const m = ev.data;
+        handlersRef.current.get(m.id)?.(m);
+      };
+      workerRef.current = w;
+      syncedSigRef.current = null;
+    }
+    return workerRef.current;
+  };
+
+  const killWorker = () => {
+    workerRef.current?.terminate();
+    workerRef.current = null;
+    syncedSigRef.current = null;
+  };
+
+  const build = (req: BuildRequest, handler: BuildHandler) => {
+    const w = ensureWorker();
+    // 上传字体集合有变化才重新同步（新上传的字体必须送达 Worker）
+    const uploads = serializeUploads();
+    const sig = uploads.map((u) => u.key).join(',');
+    if (sig !== syncedSigRef.current) {
+      w.postMessage({ kind: 'init', base: document.baseURI, uploads });
+      syncedSigRef.current = sig;
+    }
+    handlersRef.current.set(req.id, handler);
+    w.postMessage({ kind: 'build', req });
+  };
+
+  const cancel = (id: number) => {
+    handlersRef.current.delete(id);
+  };
+
+  return { build, cancel, killWorker };
+}
+
 function useScene(state: AppState) {
-  const [scene, setScene] = useState<Scene | null>(null);
+  const [built, setBuilt] = useState<BuiltScene | null>(null);
   const [missing, setMissing] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [stage, setStage] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const builder = useSceneBuilder();
+  const idRef = useRef(0);
+
   useEffect(() => {
     let alive = true;
-    let worker: Worker | null = null;
     let watchdog = 0;
+    let id = 0;
     setLoading(true);
     const timer = setTimeout(() => {
       if (!state.text.trim()) {
         if (alive) {
-          setScene(null);
+          setBuilt(null);
           setMissing([]);
           setError(null);
           setLoading(false);
         }
         return;
       }
-      worker = new Worker(new URL('./lib/scene.worker.ts', import.meta.url), { type: 'module' });
+      id = ++idRef.current;
+      const sig = reqSig(state);
       watchdog = window.setTimeout(() => {
-        worker?.terminate();
+        builder.cancel(id);
+        builder.killWorker(); // 疑似死循环：销毁重建，字体缓存随之重新加载
         if (alive) {
           setError('构建超时（已终止后台任务，请调整参数重试）');
           setLoading(false);
         }
       }, 10000);
-      worker.onmessage = (ev) => {
-        const m = ev.data;
-        if (m.type === 'progress') {
-          if (alive) setStage(m.stage);
-          return;
-        }
-        window.clearTimeout(watchdog);
-        worker?.terminate();
-        if (!alive) return;
-        if (m.type === 'result') {
-          setScene(m.scene);
-          setMissing(m.missing);
-          setError(null);
-        } else {
-          setError(String(m.error));
-        }
-        setLoading(false);
-      };
-      worker.onerror = (e) => {
-        window.clearTimeout(watchdog);
-        worker?.terminate();
-        if (alive) {
-          setError(`后台任务异常：${e.message ?? '未知错误'}`);
+      builder.build(
+        {
+          id,
+          text: state.text,
+          fontKey: state.fontKey,
+          engine: state.engine,
+          params: state.params,
+          paint: state.color.type === 'solid' ? state.color.value : 'url(#ink-grad)',
+          seal: state.seal,
+          spacing: 1 - state.params.tightness * 0.1,
+        },
+        (m) => {
+          if (!alive) return;
+          if (m.type === 'progress') {
+            setStage(m.stage ?? '');
+            return;
+          }
+          window.clearTimeout(watchdog);
+          builder.cancel(id);
+          if (m.type === 'result') {
+            setBuilt({ scene: m.scene!, text: m.text ?? state.text, sig });
+            setMissing(m.missing ?? []);
+            setError(null);
+            // E2E 测试钩子：场景版本号
+            (window as unknown as { __sceneRev?: number }).__sceneRev = id;
+          } else {
+            setError(String(m.error));
+          }
           setLoading(false);
         }
-      };
-      worker.postMessage({
-        id: Date.now(),
-        base: document.baseURI,
-        text: state.text,
-        fontKey: state.fontKey,
-        engine: state.engine,
-        params: state.params,
-        paint: state.color.type === 'solid' ? state.color.value : 'url(#ink-grad)',
-        seal: state.seal,
-        spacing: 1 - state.params.tightness * 0.1,
-      });
+      );
     }, 220);
     return () => {
       alive = false;
       clearTimeout(timer);
       window.clearTimeout(watchdog);
-      worker?.terminate();
+      if (id) builder.cancel(id);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state]);
-  return { scene, missing, loading, stage, error };
+
+  return { built, missing, loading, stage, error };
 }
 
 export default function App() {
   const [state, setState] = useState<AppState>(() => readHashState() ?? DEFAULT_STATE);
   const [playToken, setPlayToken] = useState(0);
   const [exporting, setExporting] = useState(false);
+  const [, setFontsReady] = useState(0);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const deferred = useDeferredValue(state);
-  const { scene, missing, loading, stage, error } = useScene(deferred);
+  const { built, missing, loading, stage, error } = useScene(deferred);
   const defsMarkup = useMemo(() => paintDefs(state.color), [state.color]);
+
+  // 启动：从 IndexedDB 恢复上传字体；hash 引用了不存在的字体则回退默认
+  useEffect(() => {
+    void restoreUploads().then((restored) => {
+      if (restored.length) setFontsReady((v) => v + 1);
+      setState((s) => {
+        if (allFontMetas().some((f) => f.key === s.fontKey)) return s;
+        toast.warning(`字体「${s.fontKey}」在本机不存在，已回退到默认字体`);
+        return { ...s, fontKey: DEFAULT_STATE.fontKey };
+      });
+    });
+  }, []);
 
   useEffect(() => {
     writeHashState(state);
@@ -117,12 +189,16 @@ export default function App() {
       return next;
     });
 
+  // revision 绑定：场景与当前(deferred)状态签名不一致即视为过期，禁止导出
+  const canExport = !!built && !loading && !exporting && built.sig === reqSig(deferred);
+
   const onExport = async (kind: 'svg' | 'png2' | 'png4' | 'smil' | 'webm') => {
-    if (!scene) {
-      toast.error('请先输入签名内容');
+    if (!built || loading || built.sig !== reqSig(deferred)) {
+      toast.error('场景尚未生成完成，请稍候');
       return;
     }
-    const name = (state.text.trim() || 'signature').replace(/[\\/:*?"<>|\s]+/g, '-').slice(0, 40);
+    // 文件名以"生成时的文本"为准，保证所见即所得
+    const name = (built.text.trim() || 'signature').replace(/[\\/:*?"<>|\s]+/g, '-').slice(0, 40);
     try {
       setExporting(true);
       if (kind === 'svg') {
@@ -130,9 +206,9 @@ export default function App() {
       } else if (kind === 'png2' || kind === 'png4') {
         if (svgRef.current) await exportPNG(svgRef.current, name, kind === 'png2' ? 2 : 4);
       } else if (kind === 'smil') {
-        exportSMIL(scene, defsMarkup, name);
+        exportSMIL(built.scene, defsMarkup, name);
       } else if (kind === 'webm') {
-        await exportWebM(scene, name, (m) => toast.error(m));
+        await exportWebM(built.scene, state.color, name, (m) => toast.error(m));
       }
       if (kind !== 'webm') toast.success('已导出');
     } catch (e) {
@@ -144,6 +220,9 @@ export default function App() {
 
   const onShare = async () => {
     try {
+      if (state.fontKey.startsWith('up-')) {
+        toast.warning('链接无法携带上传的字体文件，对方打开时将回退到内置字体');
+      }
       await copyShareLink(state);
       toast.success('分享链接已复制，打开即得同款设计');
     } catch {
@@ -154,6 +233,8 @@ export default function App() {
   const onUploadFont = async (file: File) => {
     try {
       const meta = await registerUpload(file);
+      void persistUpload(meta);
+      setFontsReady((v) => v + 1);
       patch({ fontKey: meta.key });
       toast.success(`已加载字体「${meta.name}」`);
     } catch (e) {
@@ -175,7 +256,7 @@ export default function App() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => setPlayToken((t) => t + 1)} disabled={!scene}>
+          <Button variant="outline" size="sm" onClick={() => setPlayToken((t) => t + 1)} disabled={!built || loading}>
             <Play className="mr-1 h-3.5 w-3.5" /> 书写动画
           </Button>
           <Button variant="outline" size="sm" onClick={onShare}>
@@ -185,7 +266,7 @@ export default function App() {
       </header>
 
       <main className="grid flex-1 lg:grid-cols-[1fr_380px]">
-        <section className="preview-bg relative min-h-[54vh] p-4 lg:min-h-0 lg:p-6">
+        <section className="preview-bg relative min-h-[54vh] min-w-0 p-4 lg:min-h-0 lg:p-6">
           <div className="absolute right-7 top-7 z-20 flex gap-1 rounded-lg border bg-card/90 p-1 backdrop-blur">
             {(
               [
@@ -220,7 +301,7 @@ export default function App() {
             </div>
           )}
           <div
-            className={`h-full w-full overflow-hidden rounded-xl p-4 transition-colors lg:p-8 ${
+            className={`relative h-full w-full overflow-hidden rounded-xl transition-colors ${
               state.bg === 'paper'
                 ? 'bg-[#f7f4ec] shadow-[inset_0_2px_18px_rgba(0,0,0,0.12),0_8px_32px_rgba(0,0,0,0.4)]'
                 : state.bg === 'dark'
@@ -228,7 +309,9 @@ export default function App() {
                   : 'checker-bg border border-border'
             }`}
           >
-            <Preview scene={scene} playToken={playToken} svgRef={svgRef} defsMarkup={defsMarkup} />
+            <div className="absolute inset-0 p-4 lg:p-8">
+              <Preview scene={built?.scene ?? null} playToken={playToken} svgRef={svgRef} defsMarkup={defsMarkup} />
+            </div>
           </div>
           {missing.length > 0 && (
             <div className="absolute bottom-4 left-4 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-600 dark:text-amber-400">
@@ -247,6 +330,7 @@ export default function App() {
             onShare={onShare}
             onUploadFont={onUploadFont}
             exporting={exporting}
+            exportDisabled={!canExport}
           />
         </aside>
       </main>

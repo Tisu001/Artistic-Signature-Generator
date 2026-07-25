@@ -1,6 +1,6 @@
 // 字体注册表：内置懒加载 + 上传 + 字符覆盖回退
-import { getHB } from './hb';
-import { cmdsBBox, parsePath, serialize, type BBox, type Cmd } from './path';
+import { getHB, type HBFont } from './hb';
+import { cmdsBBox, serialize, type BBox, type Cmd } from './path';
 
 export const BASE = 220;
 
@@ -28,7 +28,7 @@ export const BUILTIN_FONTS: FontMeta[] = [
 ];
 
 export interface LoadedFont extends FontMeta {
-  hbFont: any;
+  hbFont: HBFont;
   upem: number;
   unicodes: Set<number>;
   glyphCache: Map<number, { d: string; bbox: BBox; cmds: Cmd[] }>;
@@ -38,6 +38,34 @@ const loadedCache = new Map<string, Promise<LoadedFont>>();
 const uploadStore = new Map<string, ArrayBuffer>();
 export const uploadedMetas: FontMeta[] = [];
 let uploadSeq = 0;
+
+export interface UploadPayload {
+  key: string;
+  name: string;
+  cls: ScriptClass;
+  sizeAdjust: number;
+  buf: ArrayBuffer;
+}
+
+// 主线程与 Worker 共用：把一份上传字体数据注册进当前 Realm
+export function registerUploadData(p: UploadPayload): FontMeta {
+  uploadStore.set(p.key, p.buf);
+  let meta = uploadedMetas.find((m) => m.key === p.key);
+  if (!meta) {
+    meta = { key: p.key, name: p.name, cn: '上传字体', cls: p.cls, sizeAdjust: p.sizeAdjust, builtin: false };
+    uploadedMetas.push(meta);
+  }
+  const m = /^up-(\d+)$/.exec(p.key);
+  if (m) uploadSeq = Math.max(uploadSeq, Number(m[1]));
+  return meta;
+}
+
+// 主线程：打包全部上传字体（供发送给 Worker / 持久化）
+export function serializeUploads(): UploadPayload[] {
+  return uploadedMetas
+    .filter((m) => uploadStore.has(m.key))
+    .map((m) => ({ key: m.key, name: m.name, cls: m.cls, sizeAdjust: m.sizeAdjust, buf: uploadStore.get(m.key)! }));
+}
 
 export function allFontMetas(): FontMeta[] {
   return [...BUILTIN_FONTS, ...uploadedMetas];
@@ -99,17 +127,61 @@ export async function registerUpload(file: File): Promise<FontMeta> {
   }
   const cls: ScriptClass = han > 50 ? 'han' : arab > 50 ? 'arab' : 'latn';
   const key = `up-${++uploadSeq}`;
-  const meta: FontMeta = {
+  return registerUploadData({
     key,
     name: file.name.replace(/\.(ttf|otf|woff2?)$/i, ''),
-    cn: '上传字体',
     cls,
     sizeAdjust: cls === 'han' ? 0.94 : 1,
-    builtin: false,
-  };
-  uploadStore.set(key, buffer);
-  uploadedMetas.push(meta);
-  return meta;
+    buf: buffer,
+  });
+}
+
+// ---------- IndexedDB 持久化（仅主线程调用；刷新后上传字体不丢失） ----------
+const DB_NAME = 'artistic-signature-generator';
+const STORE = 'fonts';
+
+function openDb(): Promise<IDBDatabase> {
+  return new Promise((res, rej) => {
+    const req = indexedDB.open(DB_NAME, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore(STORE, { keyPath: 'key' });
+    req.onsuccess = () => res(req.result);
+    req.onerror = () => rej(req.error);
+  });
+}
+
+export async function persistUpload(meta: FontMeta): Promise<void> {
+  if (typeof indexedDB === 'undefined') return;
+  const buf = uploadStore.get(meta.key);
+  if (!buf) return;
+  try {
+    const db = await openDb();
+    await new Promise<void>((res, rej) => {
+      const tx = db.transaction(STORE, 'readwrite');
+      tx.objectStore(STORE).put({ key: meta.key, name: meta.name, cls: meta.cls, sizeAdjust: meta.sizeAdjust, buf });
+      tx.oncomplete = () => res();
+      tx.onerror = () => rej(tx.error);
+    });
+    db.close();
+  } catch {
+    /* 持久化失败不影响使用 */
+  }
+}
+
+export async function restoreUploads(): Promise<FontMeta[]> {
+  if (typeof indexedDB === 'undefined') return [];
+  try {
+    const db = await openDb();
+    const rows = await new Promise<UploadPayload[]>((res, rej) => {
+      const tx = db.transaction(STORE, 'readonly');
+      const req = tx.objectStore(STORE).getAll();
+      req.onsuccess = () => res(req.result as UploadPayload[]);
+      req.onerror = () => rej(req.error);
+    });
+    db.close();
+    return rows.map((r) => registerUploadData(r));
+  } catch {
+    return [];
+  }
 }
 
 // 提取字形轮廓（缓存）；坐标 y 向下，基于 BASE*sizeAdjust 像素

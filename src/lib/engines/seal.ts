@@ -1,5 +1,5 @@
 // 印章：方/圆/椭圆外框 + 汉字网格排布 / 西文弧形排布 + 朱文白文 + 做旧
-import { cmdsBBox, parsePath, serialize, transformCmds, type BBox, type Cmd } from '../path';
+import { cmdsBBox, parsePath, serialize, transformCmds, type BBox } from '../path';
 import { lerp, type EngineRun, type SceneEl } from './types';
 
 const HALF = 330;

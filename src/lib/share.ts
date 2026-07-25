@@ -1,7 +1,7 @@
 // 应用状态与 URL 分享（hash 编码）
 import type { EngineKey, EngineParams, SealOpts } from './engines/index';
 import { ENGINE_KEYS } from './engines/index';
-import type { ColorSpec } from './paint';
+import { GRADIENT_PRESETS, type ColorSpec } from './paint';
 
 export interface AppState {
   text: string;
@@ -35,39 +35,61 @@ export function encodeState(s: AppState): string {
   return b64encode(JSON.stringify({ v: 1, ...s }));
 }
 
+const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
+const FONT_KEY = /^[A-Za-z0-9][A-Za-z0-9-]{0,39}$/;
+
+function sanitizeColor(c: unknown): ColorSpec {
+  const o = c as { type?: unknown; value?: unknown } | null;
+  if (o?.type === 'gradient' && typeof o.value === 'string' && GRADIENT_PRESETS.some((g) => g.key === o.value)) {
+    return { type: 'gradient', value: o.value };
+  }
+  if (typeof o?.value === 'string' && HEX_COLOR.test(o.value)) {
+    return { type: 'solid', value: o.value };
+  }
+  return DEFAULT_STATE.color;
+}
+
+// 运行时 schema 校验：hash 可被人为构造，所有字段过白名单
+export function sanitizeState(obj: unknown): AppState | null {
+  const o = obj as Record<string, unknown> | null;
+  if (!o || typeof o.text !== 'string') return null;
+  if (!ENGINE_KEYS.includes(o.engine as EngineKey)) return null;
+  const params = o.params as Record<string, unknown> | undefined;
+  const seal = o.seal as Record<string, unknown> | undefined;
+  return {
+    // eslint-disable-next-line no-control-regex -- 有意剥离控制字符，防止日志/终端注入
+    text: o.text.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 60),
+    fontKey:
+      typeof o.fontKey === 'string' && FONT_KEY.test(o.fontKey) ? o.fontKey : DEFAULT_STATE.fontKey,
+    engine: o.engine as EngineKey,
+    params: {
+      flourish: clamp01(params?.flourish ?? 0.5),
+      tightness: clamp01(params?.tightness ?? 0.5),
+      weight: clamp01(params?.weight ?? 0.5),
+    },
+    color: sanitizeColor(o.color),
+    seal: {
+      shape: ['square', 'circle', 'ellipse'].includes(seal?.shape as string)
+        ? (seal!.shape as SealOpts['shape'])
+        : 'square',
+      mode: seal?.mode === 'bai' ? 'bai' : 'zhu',
+      distress: seal?.distress !== false,
+    },
+    bg: ['paper', 'dark', 'grid'].includes(o.bg as string) ? (o.bg as AppState['bg']) : 'paper',
+  };
+}
+
 export function readHashState(): AppState | null {
   try {
     const m = location.hash.match(/#s=([A-Za-z0-9_-]+)/);
     if (!m) return null;
-    const obj = JSON.parse(b64decode(m[1]));
-    if (!obj || typeof obj.text !== 'string') return null;
-    if (!ENGINE_KEYS.includes(obj.engine)) return null;
-    return {
-      text: obj.text.slice(0, 60),
-      fontKey: typeof obj.fontKey === 'string' ? obj.fontKey : DEFAULT_STATE.fontKey,
-      engine: obj.engine,
-      params: {
-        flourish: clamp01(obj.params?.flourish ?? 0.5),
-        tightness: clamp01(obj.params?.tightness ?? 0.5),
-        weight: clamp01(obj.params?.weight ?? 0.5),
-      },
-      color:
-        obj.color?.type === 'gradient'
-          ? { type: 'gradient', value: String(obj.color.value) }
-          : { type: 'solid', value: String(obj.color?.value ?? '#17171c') },
-      seal: {
-        shape: ['square', 'circle', 'ellipse'].includes(obj.seal?.shape) ? obj.seal.shape : 'square',
-        mode: obj.seal?.mode === 'bai' ? 'bai' : 'zhu',
-        distress: obj.seal?.distress !== false,
-      },
-      bg: ['paper', 'dark', 'grid'].includes(obj.bg) ? obj.bg : 'paper',
-    };
+    return sanitizeState(JSON.parse(b64decode(m[1])));
   } catch {
     return null;
   }
 }
 
-const clamp01 = (n: number) => Math.min(Math.max(Number(n) || 0, 0), 1);
+const clamp01 = (n: unknown) => Math.min(Math.max(Number(n) || 0, 0), 1);
 
 export function writeHashState(s: AppState) {
   const h = `#s=${encodeState(s)}`;

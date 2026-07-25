@@ -492,7 +492,7 @@ export function skeletonize(d: string, bbox: BBox, cacheKey?: string): SkStroke[
       startDir: dirAt(pts[0], pts[Math.min(1, pts.length - 1)]),
       endDir: dirAt(pts[Math.max(pts.length - 2, 0)], pts[pts.length - 1]),
       len,
-      closed: st.closed,
+      closed, // 用升级后的判定：缝合首尾同节点的闭环在此为 true
     });
   }
   if (cacheKey) skeletonCache.set(cacheKey, out);

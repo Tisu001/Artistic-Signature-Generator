@@ -99,36 +99,34 @@ export async function layoutText(
     }
   }
 
-  // 2) 每个字符选字体（回退链），并收集需加载的字体
+  // 2) 每个字符选字体（回退链按需加载：先加载者命中即用，不再预载整条链）
   const selected = await loadFont(selectedKey);
   const picked: (LoadedFont | null)[] = new Array(chars.length).fill(null);
   const missing: string[] = [];
-  const need = new Map<string, LoadedFont>();
-  need.set(selectedKey, selected);
-  const pickFor = (cp: number, cls: ScriptClass): LoadedFont | null => {
-    if (selected.unicodes.has(cp)) return selected;
-    for (const key of FALLBACK[cls]) {
-      const lf = need.get(key);
-      if (lf && lf.unicodes.has(cp)) return lf;
+  const need = new Map<string, LoadedFont | null>([[selectedKey, selected]]);
+  const getFallback = async (key: string): Promise<LoadedFont | null> => {
+    if (!need.has(key)) {
+      try {
+        need.set(key, await loadFont(key));
+      } catch {
+        need.set(key, null); // 加载失败则跳过该回退字体
+      }
     }
-    return null;
+    return need.get(key) ?? null;
   };
-  // 先加载可能需要检查覆盖率的回退字体（仅当选中字体缺字时）
-  const checkKeys = new Set<string>();
   for (let i = 0; i < chars.length; i++) {
     const cp = chars[i].codePointAt(0)!;
-    if (!selected.unicodes.has(cp)) FALLBACK[classes[i]].forEach((k) => checkKeys.add(k));
-  }
-  for (const key of checkKeys) {
-    try {
-      need.set(key, await loadFont(key));
-    } catch {
-      /* 回退字体加载失败则跳过 */
+    if (selected.unicodes.has(cp)) {
+      picked[i] = selected;
+      continue;
     }
-  }
-  for (let i = 0; i < chars.length; i++) {
-    const cp = chars[i].codePointAt(0)!;
-    picked[i] = pickFor(cp, classes[i]);
+    for (const key of FALLBACK[classes[i]]) {
+      const lf = await getFallback(key);
+      if (lf && lf.unicodes.has(cp)) {
+        picked[i] = lf;
+        break;
+      }
+    }
     if (!picked[i]) missing.push(chars[i]);
   }
 

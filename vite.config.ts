@@ -6,7 +6,7 @@ import { inspectAttr } from 'kimi-plugin-inspect-react'
 // https://vite.dev/config/
 export default defineConfig(({ command }) => ({
   base: './',
-  // Source-location attributes are useful locally but should not leak into production markup.
+  // inspectAttr 仅开发期注入 code-path，生产构建不携带
   plugins: [command === 'serve' ? inspectAttr() : null, react()].filter(Boolean),
   build: {
     target: 'esnext',
