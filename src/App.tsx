@@ -74,7 +74,7 @@ function useSceneBuilder() {
   return { build, cancel, killWorker };
 }
 
-function useScene(state: AppState, fontsReady: boolean) {
+function useScene(state: AppState, fontsReady: boolean, fontRevision: number) {
   const [built, setBuilt] = useState<BuiltScene | null>(null);
   const [missing, setMissing] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -148,7 +148,7 @@ function useScene(state: AppState, fontsReady: boolean) {
       if (id) builder.cancel(id);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state, fontsReady]);
+  }, [state, fontsReady, fontRevision]);
 
   return { built, missing, loading, stage, error };
 }
@@ -158,21 +158,20 @@ export default function App() {
   const [playToken, setPlayToken] = useState(0);
   const [exporting, setExporting] = useState(false);
   const [fontsReady, setFontsReady] = useState(false);
+  const [fontRevision, setFontRevision] = useState(0);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const deferred = useDeferredValue(state);
-  const { built, missing, loading, stage, error } = useScene(deferred, fontsReady);
+  const { built, missing, loading, stage, error } = useScene(deferred, fontsReady, fontRevision);
   const defsMarkup = useMemo(() => paintDefs(deferred.color), [deferred.color]);
 
   // 启动：从 IndexedDB 恢复上传字体；hash 引用了不存在的字体则回退默认
   useEffect(() => {
-    void restoreUploads().then((restored) => {
-      if (restored.length) {
-        setState((s) => {
-          if (allFontMetas().some((f) => f.key === s.fontKey)) return s;
-          toast.warning(`字体「${s.fontKey}」在本机不存在，已回退到默认字体`);
-          return { ...s, fontKey: DEFAULT_STATE.fontKey };
-        });
-      }
+    void restoreUploads().then(() => {
+      setState((s) => {
+        if (allFontMetas().some((f) => f.key === s.fontKey)) return s;
+        toast.warning(`字体「${s.fontKey}」在本机不存在，已回退到默认字体`);
+        return { ...s, fontKey: DEFAULT_STATE.fontKey };
+      });
       setFontsReady(true);
     });
   }, []);
@@ -238,7 +237,7 @@ export default function App() {
     try {
       const meta = await registerUpload(file);
       void persistUpload(meta);
-      setFontsReady((v) => !v);
+      setFontRevision((v) => v + 1);
       patch({ fontKey: meta.key });
       toast.success(`已加载字体「${meta.name}」`);
     } catch (e) {
@@ -266,11 +265,13 @@ export default function App() {
             onClick={() => setPlayToken((t) => t + 1)}
             disabled={!built || loading}
             className="px-2 sm:px-3"
+            aria-label="书写动画"
           >
-            <Play className="h-3.5 w-3.5 sm:mr-1" /> <span className="hidden sm:inline">书写动画</span>
+            <Play className="h-3.5 w-3.5 sm:mr-1" aria-hidden="true" />{' '}
+            <span className="hidden sm:inline">书写动画</span>
           </Button>
-          <Button variant="outline" size="sm" onClick={onShare} className="px-2 sm:px-3">
-            <Share2 className="h-3.5 w-3.5 sm:mr-1" /> <span className="hidden sm:inline">分享</span>
+          <Button variant="outline" size="sm" onClick={onShare} className="px-2 sm:px-3" aria-label="分享">
+            <Share2 className="h-3.5 w-3.5 sm:mr-1" aria-hidden="true" /> <span className="hidden sm:inline">分享</span>
           </Button>
         </div>
       </header>

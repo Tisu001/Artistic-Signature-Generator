@@ -321,8 +321,12 @@ export async function exportWebM(scene: Scene, color: ColorSpec, name: string) {
     }
   };
   requestAnimationFrame(draw);
-  await done;
-  window.clearTimeout(timeout);
+  try {
+    await done;
+  } finally {
+    window.clearTimeout(timeout);
+    stream.getTracks().forEach((t) => t.stop());
+  }
   const blob = new Blob(chunks, { type: 'video/webm' });
   if (blob.size < 1024) {
     throw new Error('视频录制失败（浏览器不支持或时长过短）');

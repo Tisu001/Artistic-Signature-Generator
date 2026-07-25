@@ -59,11 +59,8 @@ export function sanitizeState(obj: unknown): AppState | null {
   return {
     // eslint-disable-next-line no-control-regex -- 有意剥离控制字符，防止日志/终端注入
     text: o.text.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 60),
-    // 上传字体无法随链接携带，接收方若恰好有同名上传字体会发生静默碰撞，因此分享状态一律回退内置字体
     fontKey:
-      typeof o.fontKey === 'string' && FONT_KEY.test(o.fontKey) && !o.fontKey.startsWith('up-')
-        ? o.fontKey
-        : DEFAULT_STATE.fontKey,
+      typeof o.fontKey === 'string' && FONT_KEY.test(o.fontKey) ? o.fontKey : DEFAULT_STATE.fontKey,
     engine: o.engine as EngineKey,
     params: {
       flourish: clamp01(params?.flourish ?? 0.5),
@@ -102,7 +99,9 @@ export function writeHashState(s: AppState) {
 }
 
 export async function copyShareLink(s: AppState): Promise<string> {
-  const url = `${location.origin}${location.pathname}#s=${encodeState(s)}`;
+  // 上传字体无法随链接携带；生成分享链接时替换为默认字体，避免接收方发生同名碰撞
+  const shareState = s.fontKey.startsWith('up-') ? { ...s, fontKey: DEFAULT_STATE.fontKey } : s;
+  const url = `${location.origin}${location.pathname}#s=${encodeState(shareState)}`;
   await navigator.clipboard.writeText(url);
   return url;
 }
