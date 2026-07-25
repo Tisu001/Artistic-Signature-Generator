@@ -113,7 +113,12 @@ export function loadFont(key: string): Promise<LoadedFont> {
   return p;
 }
 
+const MAX_UPLOAD_FONT_SIZE = 30 * 1024 * 1024; // 30 MB
+
 export async function registerUpload(file: File): Promise<FontMeta> {
+  if (file.size > MAX_UPLOAD_FONT_SIZE) {
+    throw new Error(`字体文件过大，限制 ${MAX_UPLOAD_FONT_SIZE / 1024 / 1024}MB`);
+  }
   const buffer = await file.arrayBuffer();
   const hb = await getHB();
   const blob = new hb.Blob(buffer);

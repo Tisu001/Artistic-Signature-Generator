@@ -74,7 +74,7 @@ function useSceneBuilder() {
   return { build, cancel, killWorker };
 }
 
-function useScene(state: AppState) {
+function useScene(state: AppState, fontsReady: boolean) {
   const [built, setBuilt] = useState<BuiltScene | null>(null);
   const [missing, setMissing] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -84,6 +84,7 @@ function useScene(state: AppState) {
   const idRef = useRef(0);
 
   useEffect(() => {
+    if (!fontsReady) return;
     let alive = true;
     let watchdog = 0;
     let id = 0;
@@ -147,7 +148,7 @@ function useScene(state: AppState) {
       if (id) builder.cancel(id);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state]);
+  }, [state, fontsReady]);
 
   return { built, missing, loading, stage, error };
 }
@@ -156,21 +157,23 @@ export default function App() {
   const [state, setState] = useState<AppState>(() => readHashState() ?? DEFAULT_STATE);
   const [playToken, setPlayToken] = useState(0);
   const [exporting, setExporting] = useState(false);
-  const [, setFontsReady] = useState(0);
+  const [fontsReady, setFontsReady] = useState(false);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const deferred = useDeferredValue(state);
-  const { built, missing, loading, stage, error } = useScene(deferred);
-  const defsMarkup = useMemo(() => paintDefs(state.color), [state.color]);
+  const { built, missing, loading, stage, error } = useScene(deferred, fontsReady);
+  const defsMarkup = useMemo(() => paintDefs(deferred.color), [deferred.color]);
 
   // 启动：从 IndexedDB 恢复上传字体；hash 引用了不存在的字体则回退默认
   useEffect(() => {
     void restoreUploads().then((restored) => {
-      if (restored.length) setFontsReady((v) => v + 1);
-      setState((s) => {
-        if (allFontMetas().some((f) => f.key === s.fontKey)) return s;
-        toast.warning(`字体「${s.fontKey}」在本机不存在，已回退到默认字体`);
-        return { ...s, fontKey: DEFAULT_STATE.fontKey };
-      });
+      if (restored.length) {
+        setState((s) => {
+          if (allFontMetas().some((f) => f.key === s.fontKey)) return s;
+          toast.warning(`字体「${s.fontKey}」在本机不存在，已回退到默认字体`);
+          return { ...s, fontKey: DEFAULT_STATE.fontKey };
+        });
+      }
+      setFontsReady(true);
     });
   }, []);
 
@@ -190,7 +193,8 @@ export default function App() {
     });
 
   // revision 绑定：场景与当前(deferred)状态签名不一致即视为过期，禁止导出
-  const canExport = !!built && !loading && !exporting && built.sig === reqSig(deferred);
+  const canExport =
+    !!built && !loading && !exporting && built.sig === reqSig(deferred) && reqSig(state) === reqSig(deferred);
 
   const onExport = async (kind: 'svg' | 'png2' | 'png4' | 'smil' | 'webm') => {
     if (!built || loading || built.sig !== reqSig(deferred)) {
@@ -208,7 +212,7 @@ export default function App() {
       } else if (kind === 'smil') {
         exportSMIL(built.scene, defsMarkup, name);
       } else if (kind === 'webm') {
-        await exportWebM(built.scene, state.color, name, (m) => toast.error(m));
+        await exportWebM(built.scene, deferred.color, name);
       }
       if (kind !== 'webm') toast.success('已导出');
     } catch (e) {
@@ -234,7 +238,7 @@ export default function App() {
     try {
       const meta = await registerUpload(file);
       void persistUpload(meta);
-      setFontsReady((v) => v + 1);
+      setFontsReady((v) => !v);
       patch({ fontKey: meta.key });
       toast.success(`已加载字体「${meta.name}」`);
     } catch (e) {
@@ -245,22 +249,28 @@ export default function App() {
   return (
     <div className="flex min-h-screen flex-col bg-background text-foreground">
       <Toaster position="top-center" richColors />
-      <header className="flex items-center justify-between border-b px-5 py-3">
-        <div className="flex items-center gap-2.5">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-amber-400 to-amber-700">
+      <header className="flex items-center justify-between gap-3 border-b px-5 py-3">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-amber-400 to-amber-700">
             <Stamp className="h-4.5 w-4.5 text-white" />
           </div>
-          <div>
-            <h1 className="text-base font-bold leading-tight">Artistic-Signature-Generator</h1>
-            <p className="text-[11px] leading-tight text-muted-foreground">艺术签名设计 · 纯前端规则引擎</p>
+          <div className="min-w-0">
+            <h1 className="truncate text-base font-bold leading-tight">Artistic-Signature-Generator</h1>
+            <p className="truncate text-[11px] leading-tight text-muted-foreground">艺术签名生成器 · 纯前端规则引擎</p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => setPlayToken((t) => t + 1)} disabled={!built || loading}>
-            <Play className="mr-1 h-3.5 w-3.5" /> 书写动画
+        <div className="flex shrink-0 items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setPlayToken((t) => t + 1)}
+            disabled={!built || loading}
+            className="px-2 sm:px-3"
+          >
+            <Play className="h-3.5 w-3.5 sm:mr-1" /> <span className="hidden sm:inline">书写动画</span>
           </Button>
-          <Button variant="outline" size="sm" onClick={onShare}>
-            <Share2 className="mr-1 h-3.5 w-3.5" /> 分享
+          <Button variant="outline" size="sm" onClick={onShare} className="px-2 sm:px-3">
+            <Share2 className="h-3.5 w-3.5 sm:mr-1" /> <span className="hidden sm:inline">分享</span>
           </Button>
         </div>
       </header>

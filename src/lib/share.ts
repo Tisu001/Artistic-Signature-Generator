@@ -59,8 +59,11 @@ export function sanitizeState(obj: unknown): AppState | null {
   return {
     // eslint-disable-next-line no-control-regex -- 有意剥离控制字符，防止日志/终端注入
     text: o.text.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 60),
+    // 上传字体无法随链接携带，接收方若恰好有同名上传字体会发生静默碰撞，因此分享状态一律回退内置字体
     fontKey:
-      typeof o.fontKey === 'string' && FONT_KEY.test(o.fontKey) ? o.fontKey : DEFAULT_STATE.fontKey,
+      typeof o.fontKey === 'string' && FONT_KEY.test(o.fontKey) && !o.fontKey.startsWith('up-')
+        ? o.fontKey
+        : DEFAULT_STATE.fontKey,
     engine: o.engine as EngineKey,
     params: {
       flourish: clamp01(params?.flourish ?? 0.5),
@@ -79,10 +82,12 @@ export function sanitizeState(obj: unknown): AppState | null {
   };
 }
 
+const MAX_HASH_LEN = 4096;
+
 export function readHashState(): AppState | null {
   try {
     const m = location.hash.match(/#s=([A-Za-z0-9_-]+)/);
-    if (!m) return null;
+    if (!m || m[1].length > MAX_HASH_LEN) return null;
     return sanitizeState(JSON.parse(b64decode(m[1])));
   } catch {
     return null;

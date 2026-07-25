@@ -51,7 +51,8 @@ export async function exportPNG(svgEl: SVGSVGElement, name: string, scale: numbe
     const ctx = canvas.getContext('2d')!;
     ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
     const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, 'image/png'));
-    if (blob) downloadBlob(blob, `${name}@${scale}x.png`);
+    if (!blob) throw new Error('PNG 编码失败');
+    downloadBlob(blob, `${name}@${scale}x.png`);
   } finally {
     URL.revokeObjectURL(url);
   }
@@ -155,12 +156,7 @@ export function exportSMIL(scene: Scene, defsMarkup: string, name: string) {
 }
 
 // ---------- WebM：Canvas 原生实现渐变 / 白文挖空 / 做旧（不依赖 SVG 滤镜与 url() 画笔） ----------
-export async function exportWebM(
-  scene: Scene,
-  color: ColorSpec,
-  name: string,
-  onError: (msg: string) => void
-) {
+export async function exportWebM(scene: Scene, color: ColorSpec, name: string) {
   const vb = scene.viewBox.split(/\s+/).map(Number);
   const scale = 2;
   const W = Math.round(vb[2] * scale);
@@ -233,9 +229,25 @@ export async function exportWebM(
   rec.ondataavailable = (ev) => {
     if (ev.data.size) chunks.push(ev.data);
   };
-  const done = new Promise<void>((res) => {
-    rec.onstop = () => res();
+  let recorderError: string | null = null;
+  let recorderStopped = false;
+  const done = new Promise<void>((res, rej) => {
+    rec.onstop = () => (recorderError ? rej(new Error(recorderError)) : res());
+    rec.onerror = (e) => rej(new Error('录制错误：' + (e instanceof Error ? e.message : String(e))));
   });
+  const stopRecording = () => {
+    if (recorderStopped) return;
+    recorderStopped = true;
+    try {
+      rec.stop();
+    } catch {
+      /* MediaRecorder 可能已停止 */
+    }
+  };
+  const timeout = window.setTimeout(() => {
+    recorderError = '视频录制超时';
+    stopRecording();
+  }, 30000);
   rec.start();
   const t0 = performance.now();
 
@@ -305,15 +317,15 @@ export async function exportWebM(
     if (el < tl.total) {
       requestAnimationFrame(draw);
     } else {
-      rec.stop();
+      stopRecording();
     }
   };
   requestAnimationFrame(draw);
   await done;
+  window.clearTimeout(timeout);
   const blob = new Blob(chunks, { type: 'video/webm' });
   if (blob.size < 1024) {
-    onError('视频录制失败（浏览器不支持或时长过短）');
-    return;
+    throw new Error('视频录制失败（浏览器不支持或时长过短）');
   }
   downloadBlob(blob, `${name}-书写动画.webm`);
 }

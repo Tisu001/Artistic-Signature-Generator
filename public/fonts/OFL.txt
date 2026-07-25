@@ -2,7 +2,7 @@ Artistic-Signature-Generator 内置字体许可证
 ==================
 
 本目录下的 8 款字体均以 SIL Open Font License 1.1 发布，
-各字体的版权归属见项目根目录 FONT-LICENSES.md。
+各字体的版权归属见本目录 FONT-LICENSES.md。
 OFL 1.1 全文如下：
 
 
