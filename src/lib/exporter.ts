@@ -248,80 +248,80 @@ export async function exportWebM(scene: Scene, color: ColorSpec, name: string) {
     recorderError = '视频录制超时';
     stopRecording();
   }, 30000);
-  rec.start();
-  const t0 = performance.now();
+  try {
+    rec.start();
+    const t0 = performance.now();
 
-  const draw = () => {
-    const el = (performance.now() - t0) / 1000;
-    // 1) 墨水层
-    ictx.setTransform(scale, 0, 0, scale, -vb[0] * scale, -vb[1] * scale);
-    ictx.clearRect(vb[0], vb[1], vb[2], vb[3]);
-    // 白文印章：先铺底色，再用 ghost 字形挖空
-    if (maskedBg) {
-      const p = Math.min(Math.max((el - maskedBg.begin) / maskedBg.dur, 0), 1);
-      if (p > 0) {
-        ictx.globalAlpha = p * maskedBg.target;
-        ictx.fillStyle = maskedBg.paint;
-        ictx.fill(maskedBg.path);
-        ictx.globalAlpha = 1;
+    const draw = () => {
+      const el = (performance.now() - t0) / 1000;
+      // 1) 墨水层
+      ictx.setTransform(scale, 0, 0, scale, -vb[0] * scale, -vb[1] * scale);
+      ictx.clearRect(vb[0], vb[1], vb[2], vb[3]);
+      // 白文印章：先铺底色，再用 ghost 字形挖空
+      if (maskedBg) {
+        const p = Math.min(Math.max((el - maskedBg.begin) / maskedBg.dur, 0), 1);
+        if (p > 0) {
+          ictx.globalAlpha = p * maskedBg.target;
+          ictx.fillStyle = maskedBg.paint;
+          ictx.fill(maskedBg.path);
+          ictx.globalAlpha = 1;
+          ictx.save();
+          ictx.globalCompositeOperation = 'destination-out';
+          for (const g of ghosts) ictx.fill(g);
+          ictx.restore();
+        }
+      }
+      // 填充淡入
+      for (const f of plainFills) {
+        const p = Math.min(Math.max((el - f.begin) / f.dur, 0), 1);
+        if (p <= 0) continue;
+        ictx.globalAlpha = p * f.target;
+        ictx.fillStyle = f.paint;
+        ictx.fill(f.path);
+      }
+      ictx.globalAlpha = 1;
+      // 描边书写
+      for (const s of strokeItems) {
+        const p = Math.min(Math.max((el - s.begin) / s.dur, 0), 1);
+        if (p <= 0) continue;
+        ictx.strokeStyle = s.paint;
+        ictx.lineWidth = num(s.style.sw, 1);
+        ictx.lineCap = 'round';
+        ictx.lineJoin = 'round';
+        ictx.globalAlpha = num(s.style.opacity, 1);
+        if (p >= 1) {
+          ictx.setLineDash([]);
+          ictx.stroke(s.path);
+        } else {
+          ictx.setLineDash([s.len * p, s.len * 1.2]);
+          ictx.lineDashOffset = 0;
+          ictx.stroke(s.path);
+        }
+      }
+      ictx.globalAlpha = 1;
+      ictx.setLineDash([]);
+      // 2) 做旧噪声侵蚀（仅墨水层）
+      if (noise) {
         ictx.save();
+        ictx.setTransform(1, 0, 0, 1, 0, 0);
         ictx.globalCompositeOperation = 'destination-out';
-        for (const g of ghosts) ictx.fill(g);
+        ictx.globalAlpha = 0.55;
+        ictx.imageSmoothingEnabled = false;
+        ictx.drawImage(noise, 0, 0, W, H);
         ictx.restore();
       }
-    }
-    // 填充淡入
-    for (const f of plainFills) {
-      const p = Math.min(Math.max((el - f.begin) / f.dur, 0), 1);
-      if (p <= 0) continue;
-      ictx.globalAlpha = p * f.target;
-      ictx.fillStyle = f.paint;
-      ictx.fill(f.path);
-    }
-    ictx.globalAlpha = 1;
-    // 描边书写
-    for (const s of strokeItems) {
-      const p = Math.min(Math.max((el - s.begin) / s.dur, 0), 1);
-      if (p <= 0) continue;
-      ictx.strokeStyle = s.paint;
-      ictx.lineWidth = num(s.style.sw, 1);
-      ictx.lineCap = 'round';
-      ictx.lineJoin = 'round';
-      ictx.globalAlpha = num(s.style.opacity, 1);
-      if (p >= 1) {
-        ictx.setLineDash([]);
-        ictx.stroke(s.path);
+      // 3) 合成：白底 + 墨水（WebM 为不透明的白底视频，便于直接分享）
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, W, H);
+      ctx.drawImage(ink, 0, 0);
+      if (el < tl.total) {
+        requestAnimationFrame(draw);
       } else {
-        ictx.setLineDash([s.len * p, s.len * 1.2]);
-        ictx.lineDashOffset = 0;
-        ictx.stroke(s.path);
+        stopRecording();
       }
-    }
-    ictx.globalAlpha = 1;
-    ictx.setLineDash([]);
-    // 2) 做旧噪声侵蚀（仅墨水层）
-    if (noise) {
-      ictx.save();
-      ictx.setTransform(1, 0, 0, 1, 0, 0);
-      ictx.globalCompositeOperation = 'destination-out';
-      ictx.globalAlpha = 0.55;
-      ictx.imageSmoothingEnabled = false;
-      ictx.drawImage(noise, 0, 0, W, H);
-      ictx.restore();
-    }
-    // 3) 合成：白底 + 墨水（WebM 为不透明的白底视频，便于直接分享）
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, W, H);
-    ctx.drawImage(ink, 0, 0);
-    if (el < tl.total) {
-      requestAnimationFrame(draw);
-    } else {
-      stopRecording();
-    }
-  };
-  requestAnimationFrame(draw);
-  try {
+    };
+    requestAnimationFrame(draw);
     await done;
   } finally {
     window.clearTimeout(timeout);

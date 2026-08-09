@@ -6,13 +6,14 @@ import { ControlPanel } from '@/components/ControlPanel';
 import { Preview } from '@/components/Preview';
 import { type EngineKey, type Scene } from '@/lib/engines/index';
 import { exportPNG, exportSMIL, exportSVG, exportWebM } from '@/lib/exporter';
-import { allFontMetas, persistUpload, registerUpload, restoreUploads, serializeUploads } from '@/lib/fonts';
+import { persistUpload, registerUpload, restoreUploads, resolveFontKey, serializeUploads } from '@/lib/fonts';
 import { paintDefs } from '@/lib/paint';
 import type { BuildRequest } from '@/lib/scene.worker';
 import {
   copyShareLink,
   DEFAULT_STATE,
   readHashState,
+  reqSig,
   writeHashState,
   type AppState,
 } from '@/lib/share';
@@ -22,10 +23,6 @@ interface BuiltScene {
   text: string; // 生成时使用的文本：导出文件名以此为准，避免"旧签名、新文件名"
   sig: string; // 生成时状态的签名：与当前状态不一致时禁止导出
 }
-
-// 状态签名：影响场景内容的所有字段（预览背景除外）
-const reqSig = (s: AppState) =>
-  JSON.stringify([s.text, s.fontKey, s.engine, s.params, s.color, s.seal]);
 
 type BuildHandler = (m: { type: string; stage?: string; scene?: Scene; missing?: string[]; text?: string; error?: string }) => void;
 
@@ -168,9 +165,10 @@ export default function App() {
   useEffect(() => {
     void restoreUploads().then(() => {
       setState((s) => {
-        if (allFontMetas().some((f) => f.key === s.fontKey)) return s;
+        const resolved = resolveFontKey(s.fontKey, DEFAULT_STATE.fontKey);
+        if (resolved === s.fontKey) return s;
         toast.warning(`字体「${s.fontKey}」在本机不存在，已回退到默认字体`);
-        return { ...s, fontKey: DEFAULT_STATE.fontKey };
+        return { ...s, fontKey: resolved };
       });
       setFontsReady(true);
     });

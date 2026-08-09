@@ -23,6 +23,10 @@ export const DEFAULT_STATE: AppState = {
   bg: 'paper',
 };
 
+// 状态签名：影响场景内容的所有字段（预览背景除外）
+export const reqSig = (s: AppState) =>
+  JSON.stringify([s.text, s.fontKey, s.engine, s.params, s.color, s.seal]);
+
 function b64encode(s: string): string {
   return btoa(unescape(encodeURIComponent(s))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }

@@ -44,6 +44,37 @@ npm run lint       # ESLint（0 error 基线）
 npm test           # Vitest 单元测试（路径/骨架/分享校验/转义）
 ```
 
+## Windows 便携版
+
+项目包含一个 Go 编写的 Windows 启动器，双击即可启动本地 HTTP 服务并用系统浏览器打开应用，无需 Node.js 或联网。
+
+```bash
+npm run package    # 生成 release/staging/艺术签名生成器/ 目录与 ZIP 压缩包
+```
+
+打包需要：
+- Node.js 20+
+- Go 1.22+
+- goversioninfo：`go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.4.0`
+
+产物结构：
+```
+release/
+├── staging/
+│   └── 艺术签名生成器/
+│       ├── 艺术签名生成器.exe
+│       └── app/              # Vite 构建后的网页、字体、WASM 资源
+└── Artistic-Signature-Generator-v0.3.0-windows-x64.zip
+```
+
+启动器特性：
+- 自动选择空闲端口，仅监听 `127.0.0.1`。
+- 系统托盘提供“打开页面”与“退出”。
+- 命名互斥体 + 命名管道 IPC：重复双击会通知已有实例打开新标签页，不启动第二个服务。
+- 支持 `--open-url` 参数用于调试（仅限 `http://localhost` 和 `http://127.0.0.1`）。
+
+GitHub Actions 会在 push/PR 时自动打包并上传 Artifact；推送 `v*` 标签时发布 Release。
+
 ## 适用范围与限制（诚实声明）
 
 - 导出物是面向屏幕的矢量/位图：含 SVG 滤镜、渐变、未展开描边，无物理尺寸与色彩管理。

@@ -26,3 +26,9 @@ dist-ssr
 # Environment variables
 .env
 .env.*
+
+# Launcher build outputs
+release
+*.syso
+cmd/launcher/app-icon.ico
+assets/branding/*.ico

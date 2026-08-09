@@ -1,0 +1,43 @@
+{
+  "FixedFileInfo": {
+    "FileVersion": {
+      "Major": 0,
+      "Minor": 3,
+      "Patch": 0,
+      "Build": 0
+    },
+    "ProductVersion": {
+      "Major": 0,
+      "Minor": 3,
+      "Patch": 0,
+      "Build": 0
+    },
+    "FileFlagsMask": "3f",
+    "FileFlags": "00",
+    "FileOS": "040004",
+    "FileType": "01",
+    "FileSubType": "00"
+  },
+  "StringFileInfo": {
+    "Comments": "艺术签名生成器 - 纯前端字体轮廓特效器",
+    "CompanyName": "",
+    "FileDescription": "艺术签名生成器",
+    "FileVersion": "0.3.0.0",
+    "InternalName": "艺术签名生成器",
+    "LegalCopyright": "",
+    "LegalTrademarks": "",
+    "OriginalFilename": "艺术签名生成器.exe",
+    "PrivateBuild": "",
+    "ProductName": "艺术签名生成器",
+    "ProductVersion": "0.3.0",
+    "SpecialBuild": ""
+  },
+  "VarFileInfo": {
+    "Translation": {
+      "LangID": "0804",
+      "CharsetID": "04B0"
+    }
+  },
+  "IconPath": "../../assets/branding/app-icon.ico",
+  "ManifestPath": ""
+}

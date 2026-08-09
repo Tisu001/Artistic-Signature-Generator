@@ -71,6 +71,10 @@ export function allFontMetas(): FontMeta[] {
   return [...BUILTIN_FONTS, ...uploadedMetas];
 }
 
+export function resolveFontKey(fontKey: string, fallbackKey: string): string {
+  return allFontMetas().some((f) => f.key === fontKey) ? fontKey : fallbackKey;
+}
+
 let fontBase: string | null = null;
 
 export function setFontBase(u: string) {
