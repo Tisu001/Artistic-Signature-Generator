@@ -73,8 +73,8 @@ function makeVersionInfoJSON(version) {
 checkCommand('go', '请安装 Go 并加入 PATH');
 checkCommand('goversioninfo', '请安装 goversioninfo: go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@latest');
 
-// Resolve transitive module go.mod checksums before compiling the launcher.
-run('go mod download', { cwd: launcherSrc });
+// Resolve and record transitive dependencies before compiling the launcher.
+run('go mod tidy', { cwd: launcherSrc });
 
 run('node scripts/generate-icons.js');
 await copyFile(join(root, 'assets', 'branding', 'app-icon.ico'), join(launcherSrc, 'app-icon.ico'));
@@ -82,7 +82,7 @@ await writeFile(join(launcherSrc, 'versioninfo.json'), makeVersionInfoJSON(versi
 run('goversioninfo -64 -o rsrc_windows_amd64.syso versioninfo.json', { cwd: launcherSrc });
 
 mkdirSync(stagingDir, { recursive: true });
-run(`go build -ldflags="-H windowsgui -s -w" -o "${join(stagingDir, exeName)}" .`, { cwd: launcherSrc });
+run(`go build -mod=mod -ldflags="-H windowsgui -s -w" -o "${join(stagingDir, exeName)}" .`, { cwd: launcherSrc });
 
 try { await rm(join(launcherSrc, 'app-icon.ico')); } catch {}
 try { await rm(join(launcherSrc, 'rsrc_windows_amd64.syso')); } catch {}

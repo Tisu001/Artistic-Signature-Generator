@@ -108,8 +108,8 @@ console.log('[2/6] 检查构建依赖...');
 checkCommand('go', '请安装 Go 并加入 PATH');
 checkCommand('goversioninfo', '请安装 goversioninfo: go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@latest');
 
-// Resolve transitive module go.mod checksums before the Windows build.
-run('go mod download', { cwd: launcherSrc });
+// Resolve and record transitive dependencies before the Windows build.
+run('go mod tidy', { cwd: launcherSrc });
 
 // 3. 前端构建
 console.log('[3/6] 构建前端 dist...');
@@ -129,7 +129,7 @@ console.log('[6/6] 编译并组装便携包...');
 // 清理整个 staging，避免 build:launcher 遗留的单独 exe 被误打包
 await clean(stagingDir);
 ensureDir(packageDir);
-run(`go build -ldflags="-H windowsgui -s -w" -o "${join(packageDir, exeName)}" .`, { cwd: launcherSrc });
+run(`go build -mod=mod -ldflags="-H windowsgui -s -w" -o "${join(packageDir, exeName)}" .`, { cwd: launcherSrc });
 
 // 复制 dist 到 app/
 await copyDir(join(root, 'dist'), join(packageDir, 'app'));

@@ -9,7 +9,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/microsoft/go-winio"
+	"github.com/Microsoft/go-winio"
 	"golang.org/x/sys/windows"
 )
 
@@ -19,7 +19,7 @@ func currentUserSID() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return user.User.Sid.String()
+	return user.User.Sid.String(), nil
 }
 
 func acquireMutex(name string) (syscall.Handle, bool, error) {
@@ -48,7 +48,8 @@ func sendOpenCommand(pipeName string) error {
 		if i > 0 {
 			time.Sleep(50 * time.Millisecond)
 		}
-		conn, err := winio.DialPipe(pipeName, &winio.PipeDialTimeout{Timeout: 2 * time.Second})
+		timeout := 2 * time.Second
+		conn, err := winio.DialPipe(pipeName, &timeout)
 		if err != nil {
 			lastErr = err
 			continue
