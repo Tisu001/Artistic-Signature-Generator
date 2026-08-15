@@ -39,6 +39,22 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: Test launcher scripts
+        run: npm run test:launcher
+
+      - name: Prepare launcher resources for Go test
+        run: |
+          node scripts/generate-icons.js
+          Copy-Item assets\branding\app-icon.ico cmd\launcher\app-icon.ico
+
+      - name: Resolve Go dependencies
+        working-directory: cmd/launcher
+        run: go mod tidy
+
+      - name: Test Go launcher
+        working-directory: cmd/launcher
+        run: go test ./...
+
       - name: Validate tag version
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash

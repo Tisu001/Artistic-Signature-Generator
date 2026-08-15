@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "test": "vitest run --dir src",
+    "test:launcher": "node --test scripts/lib/versioninfo.test.js",
     "preview": "vite preview",
     "build:launcher": "node scripts/build-launcher.js",
     "package": "node scripts/package.js"

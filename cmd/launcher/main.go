@@ -24,13 +24,26 @@ const appName = "艺术签名生成器"
 const mutexNamePrefix = "Local\\ArtisticSignatureGenerator-"
 const pipeNamePrefix = `\\.\pipe\ArtisticSignatureGenerator-`
 
+func getAppDir(exePath string) string {
+	exeDir := filepath.Dir(exePath)
+	return filepath.Join(exeDir, "app")
+}
+
+func checkAppDir(exePath string) (string, error) {
+	appDir := getAppDir(exePath)
+	if _, err := os.Stat(appDir); os.IsNotExist(err) {
+		return "", fmt.Errorf("未找到应用目录: %s\n请确保 app/ 文件夹与 %s.exe 在同一目录", appDir, appName)
+	}
+	return appDir, nil
+}
+
 func main() {
 	openURL := flag.String("open-url", "", "仅打开指定 URL，不启动本地服务（仅限 localhost/127.0.0.1）")
 	flag.Parse()
 
 	if *openURL != "" {
 		if !isAllowedLocalURL(*openURL) {
-			log.Fatalf("--open-url 仅允许 http://localhost 或 http://127.0.0.1 地址")
+			fatalErrorf("--open-url 仅允许 http://localhost 或 http://127.0.0.1 地址")
 		}
 		runTrayOnly(*openURL)
 		return
@@ -39,18 +52,16 @@ func main() {
 	// 基于 exe 目录定位 app/，不依赖工作目录
 	exePath, err := os.Executable()
 	if err != nil {
-		log.Fatalf("无法获取程序路径: %v", err)
+		fatalErrorf("无法获取程序路径: %v", err)
 	}
-	exeDir := filepath.Dir(exePath)
-	appDir := filepath.Join(exeDir, "app")
-
-	if _, err := os.Stat(appDir); os.IsNotExist(err) {
-		log.Fatalf("未找到应用目录: %s\n请确保 app/ 文件夹与 %s.exe 在同一目录。", appDir, appName)
+	appDir, err := checkAppDir(exePath)
+	if err != nil {
+		fatalError(err)
 	}
 
 	userSID, err := currentUserSID()
 	if err != nil {
-		log.Fatalf("无法获取用户 SID: %v", err)
+		fatalErrorf("无法获取用户 SID: %v", err)
 	}
 	mutexName := mutexNamePrefix + userSID
 	pipeName := pipeNamePrefix + userSID
@@ -58,7 +69,7 @@ func main() {
 	// 尝试创建命名互斥体；若已存在则向首个实例发送 OPEN 指令后退出
 	mutex, alreadyRunning, err := acquireMutex(mutexName)
 	if err != nil {
-		log.Fatalf("互斥体创建失败: %v", err)
+		fatalErrorf("互斥体创建失败: %v", err)
 	}
 	if alreadyRunning {
 		if err := sendOpenCommand(pipeName); err != nil {
@@ -72,7 +83,7 @@ func main() {
 	// 监听 127.0.0.1:0，由系统分配空闲端口
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
-		log.Fatalf("无法绑定端口: %v", err)
+		fatalErrorf("无法绑定端口: %v", err)
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
 	baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
@@ -96,7 +107,7 @@ func main() {
 	defer pipeCancel()
 	openPageCh := make(chan struct{}, 1)
 	if err := runPipeServer(pipeCtx, pipeName, openPageCh); err != nil {
-		log.Fatalf("命名管道监听失败: %v", err)
+		fatalErrorf("命名管道监听失败: %v", err)
 	}
 
 	// 托盘与浏览器打开都在 systray.Run 中完成
